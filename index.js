@@ -1,42 +1,50 @@
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const path = require("path");
 const db = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// ============== Middleware ==============
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Import routes
+// ============== Static uploads ==============
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
+// ============== Routes ==============
+const adminRoutes = require("./routes/admins");
+const teamleadRoutes = require("./routes/teamleads");
+const ticketRoutes = require("./routes/tickets");
+const notificationRoutes = require("./routes/notifications");
 
-// Use routes
-
-
-// Health check endpoint
-app.get("/api/health", (req, res) => {
+app.use("/api/admins", adminRoutes);
+app.use("/api/teamleads", teamleadRoutes);
+app.use("/api/tickets", ticketRoutes);
+app.use("/api/notifications", notificationRoutes);
+// ============== Health check ==============
+app.get("/api/health", (_req, res) => {
   res.json({ status: "OK", message: "Server is running" });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
+// ============== Error handler ==============
+app.use((err, _req, res, _next) => {
   console.error("Error:", err);
   res.status(500).json({
     success: false,
     message: "Internal server error",
-    error: err.message
+    error: err.message,
   });
 });
 
-// Start server
+// ============== Start ==============
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📝 Contact API: http://localhost:${PORT}/api/contact`);
-  console.log(`📝 Distributor API: http://localhost:${PORT}/api/distributor`);
-  console.log(`📝 Super Stockist API: http://localhost:${PORT}/api/super-stockist`);
-  console.log(`📝 Dealer API: http://localhost:${PORT}/api/dealer`);
+  console.log(`📝 Admin API:     http://localhost:${PORT}/api/admins`);
+  console.log(`📝 Team Lead API: http://localhost:${PORT}/api/teamleads`);
+  console.log(`📝 Tickets API:   http://localhost:${PORT}/api/tickets`);
+  console.log(`📝 Tickets API:   http://localhost:${PORT}/api/notifications`);
 });

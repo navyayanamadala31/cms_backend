@@ -4,6 +4,68 @@ const db = require("../db");
 const router = express.Router();
 
 /* =========================================================
+   GET /api/notifications/unread-count?user_id=5
+   IMPORTANT: must be BEFORE any /:id route
+   ========================================================= */
+router.get("/unread-count", async (req, res) => {
+  try {
+    const { user_id } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id query parameter is required",
+      });
+    }
+
+    const [rows] = await db.query(
+      "SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND is_read = 0",
+      [user_id]
+    );
+
+    return res.json({ success: true, count: rows[0].count });
+  } catch (err) {
+    console.error("Unread count error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to count",
+      error: err.message,
+    });
+  }
+});
+
+/* =========================================================
+   PUT /api/notifications/mark-all-read?user_id=5
+   IMPORTANT: must be BEFORE /:id/read
+   ========================================================= */
+router.put("/mark-all-read", async (req, res) => {
+  try {
+    const { user_id } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id query parameter is required",
+      });
+    }
+
+    await db.query(
+      "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0",
+      [user_id]
+    );
+
+    return res.json({ success: true, message: "All marked as read" });
+  } catch (err) {
+    console.error("Mark all read error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to mark all as read",
+      error: err.message,
+    });
+  }
+});
+
+/* =========================================================
    GET /api/notifications?user_id=5
    List notifications for a user (newest first)
    ========================================================= */
@@ -44,37 +106,6 @@ router.get("/", async (req, res) => {
 });
 
 /* =========================================================
-   GET /api/notifications/unread-count?user_id=5
-   Quick badge count
-   ========================================================= */
-router.get("/unread-count", async (req, res) => {
-  try {
-    const { user_id } = req.query;
-
-    if (!user_id) {
-      return res.status(400).json({
-        success: false,
-        message: "user_id query parameter is required",
-      });
-    }
-
-    const [rows] = await db.query(
-      "SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND is_read = 0",
-      [user_id]
-    );
-
-    return res.json({ success: true, count: rows[0].count });
-  } catch (err) {
-    console.error("Unread count error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to count",
-      error: err.message,
-    });
-  }
-});
-
-/* =========================================================
    PUT /api/notifications/:id/read
    Mark one as read
    ========================================================= */
@@ -98,36 +129,6 @@ router.put("/:id/read", async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to mark as read",
-      error: err.message,
-    });
-  }
-});
-
-/* =========================================================
-   PUT /api/notifications/mark-all-read?user_id=5
-   ========================================================= */
-router.put("/mark-all-read", async (req, res) => {
-  try {
-    const { user_id } = req.query;
-
-    if (!user_id) {
-      return res.status(400).json({
-        success: false,
-        message: "user_id query parameter is required",
-      });
-    }
-
-    await db.query(
-      "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0",
-      [user_id]
-    );
-
-    return res.json({ success: true, message: "All marked as read" });
-  } catch (err) {
-    console.error("Mark all read error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to mark all as read",
       error: err.message,
     });
   }

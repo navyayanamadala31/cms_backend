@@ -5,22 +5,26 @@ const router = express.Router();
 
 /* =========================================================
    Helper — insert notifications for a list of user ids
-   Silently ignores errors so it never breaks the main flow.
    ========================================================= */
 const notifyUsers = async (userIds, { ticket_id, title, message, type }) => {
   const ids = (userIds || []).filter((v) => v !== null && v !== undefined);
-  if (ids.length === 0) return;
+  if (ids.length === 0) {
+    console.log("🔔 notifyUsers skipped — no recipients");
+    return;
+  }
 
   try {
     const values = ids.map((uid) => [uid, ticket_id, title, message, type]);
-    await db.query(
+    const [result] = await db.query(
       `INSERT INTO notifications
         (user_id, ticket_id, title, message, type)
        VALUES ?`,
       [values]
     );
+    console.log(`🔔 Notified users [${ids.join(",")}] — ${type}`);
   } catch (err) {
-    console.error("Notify users error (ignored):", err.message);
+    console.error("🔔 Notify users FAILED:", err.message);
+    console.error("   full error:", err);
   }
 };
 
@@ -92,10 +96,11 @@ router.post("/", upload.single("attachment"), async (req, res) => {
       ]
     );
 
-    // ---- Notify all admins + superadmins about the new ticket ----
+    // ---- Notify all admins about the new ticket ----
     const [admins] = await db.query(
       "SELECT id FROM users WHERE role IN ('admin','superadmin') AND status = 'active'"
     );
+    console.log("📥 New ticket → notifying admins:", admins.map((a) => a.id));
     await notifyUsers(
       admins.map((a) => a.id),
       {
@@ -217,7 +222,6 @@ router.get("/:id", async (req, res) => {
 
 /* =========================================================
    PUT /api/tickets/:id
-   Update ticket (status, priority, assigned_to, assigned_by, resolution_notes)
    ========================================================= */
 router.put("/:id", async (req, res) => {
   try {
@@ -283,6 +287,7 @@ router.put("/:id", async (req, res) => {
 
     // ---- Notify on assignment ----
     if (status === "ASSIGNED" && assigned_to) {
+      console.log(`📥 Ticket #${id} assigned → notifying user ${assigned_to}`);
       await notifyUsers(
         [assigned_to],
         {
@@ -298,6 +303,9 @@ router.put("/:id", async (req, res) => {
     if (status === "RESOLVED") {
       // Notify the customer (if any)
       if (existing[0].customer_id) {
+        console.log(
+          `📥 Ticket #${id} resolved → notifying customer ${existing[0].customer_id}`
+        );
         await notifyUsers(
           [existing[0].customer_id],
           {
@@ -314,6 +322,9 @@ router.put("/:id", async (req, res) => {
       // Notify the admin who assigned it
       const adminToNotify = existing[0].assigned_by || assigned_by;
       if (adminToNotify) {
+        console.log(
+          `📥 Ticket #${id} resolved → notifying admin ${adminToNotify}`
+        );
         await notifyUsers(
           [adminToNotify],
           {
@@ -322,6 +333,10 @@ router.put("/:id", async (req, res) => {
             message: `Ticket #${id} was resolved by the team lead.`,
             type: "TICKET_RESOLVED",
           }
+        );
+      } else {
+        console.log(
+          `📥 Ticket #${id} resolved → no admin to notify (assigned_by is null)`
         );
       }
     }

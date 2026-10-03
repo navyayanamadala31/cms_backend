@@ -20,11 +20,14 @@ const adminRoutes = require("./routes/admins");
 const teamleadRoutes = require("./routes/teamleads");
 const ticketRoutes = require("./routes/tickets");
 const notificationRoutes = require("./routes/notifications");
-
+const customerRoutes = require("./routes/customers"); 
+const projectRoutes = require("./routes/projects"); 
 app.use("/api/admins", adminRoutes);
 app.use("/api/teamleads", teamleadRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/customers", customerRoutes); 
+app.use("/api/projects", projectRoutes); 
 // ============== Health check ==============
 app.get("/api/health", (_req, res) => {
   res.json({ status: "OK", message: "Server is running" });
@@ -43,8 +46,10 @@ app.use((err, _req, res, _next) => {
 // ============== Start ==============
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📝 Admin API:     http://localhost:${PORT}/api/admins`);
-  console.log(`📝 Team Lead API: http://localhost:${PORT}/api/teamleads`);
-  console.log(`📝 Tickets API:   http://localhost:${PORT}/api/tickets`);
-  console.log(`📝 Tickets API:   http://localhost:${PORT}/api/notifications`);
+  console.log(`📝 Admin API:         http://localhost:${PORT}/api/admins`);
+  console.log(`📝 Team Lead API:     http://localhost:${PORT}/api/teamleads`);
+  console.log(`📝 Tickets API:       http://localhost:${PORT}/api/tickets`);
+  console.log(`📝 Notifications API: http://localhost:${PORT}/api/notifications`);
+  console.log(`📝 Customer API:      http://localhost:${PORT}/api/customers`);
+  console.log(`📝 Projects API:      http://localhost:${PORT}/api/projects`);
 });

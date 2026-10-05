@@ -5,24 +5,30 @@ const router = express.Router();
 
 /* =========================================================
    Helper — insert notifications for a list of user ids
-   Silently ignores errors so it never breaks the main flow.
    ========================================================= */
 const notifyUsers = async (userIds, { ticket_id, title, message, type }) => {
-  const ids = (userIds || []).filter((v) => v !== null && v !== undefined);
+  const ids = (userIds || [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isInteger(v) && v > 0);
+
   if (ids.length === 0) {
-    console.log("🔔 notifyUsers skipped — no recipients");
+    console.log("🔔 notifyUsers skipped — no recipients", { userIds, type });
     return;
   }
 
   try {
-    const values = ids.map((uid) => [uid, ticket_id, title, message, type]);
-    await db.query(
+    const values = ids.map((uid) => [uid, ticket_id ?? null, title, message, type, 0]);
+
+    const [result] = await db.query(
       `INSERT INTO notifications
-        (user_id, ticket_id, title, message, type)
+         (user_id, ticket_id, title, message, type, is_read)
        VALUES ?`,
       [values]
     );
-    console.log(`🔔 Notified users [${ids.join(",")}] — ${type}`);
+
+    console.log(
+      `🔔 Notified users [${ids.join(",")}] — ${type} — inserted=${result.affectedRows}`
+    );
   } catch (err) {
     console.error("🔔 Notify users FAILED:", err.message);
   }
@@ -65,14 +71,14 @@ router.post("/", async (req, res) => {
       ]
     );
 
-    // ---- Notify all admins about the new project ----
+    // Notify all active admins + superadmins
     const [admins] = await db.query(
       "SELECT id FROM users WHERE role IN ('admin','superadmin') AND status = 'active'"
     );
     await notifyUsers(
       admins.map((a) => a.id),
       {
-        ticket_id: result.insertId, // reuse the column as a generic "entity id"
+        ticket_id: result.insertId,
         title: "New project created",
         message: `${name.trim()} — project #${result.insertId}`,
         type: "PROJECT_CREATED",
@@ -82,16 +88,7 @@ router.post("/", async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Project created successfully",
-      data: {
-        id: result.insertId,
-        name,
-        description: description || null,
-        start_date: start_date || null,
-        end_date: end_date || null,
-        customer_id: customer_id || null,
-        admin_id: admin_id || null,
-        teamlead_id: teamlead_id || null,
-      },
+      data: { id: result.insertId, name },
     });
   } catch (err) {
     console.error("Create project error:", err);
@@ -192,7 +189,6 @@ router.put("/:id", async (req, res) => {
       progress_notes,
     } = req.body;
 
-    // ---- Fetch current state so we can build smart notifications ----
     const [existing] = await db.query(
       "SELECT id, name, customer_id, admin_id, teamlead_id, status FROM projects WHERE id = ? LIMIT 1",
       [id]
@@ -205,6 +201,8 @@ router.put("/:id", async (req, res) => {
     }
 
     const before = existing[0];
+    console.log("🧾 PUT /projects/:id — before =", before);
+    console.log("🧾 PUT /projects/:id — body   =", req.body);
 
     const fields = [];
     const values = [];
@@ -237,14 +235,17 @@ router.put("/:id", async (req, res) => {
       fields.push("teamlead_id = ?");
       values.push(teamlead_id || null);
     }
-    if (
-      status &&
-      ["ASSIGNED", "IN_PROGRESS", "COMPLETED", "ON_HOLD", "CLOSED"].includes(
-        status
-      )
-    ) {
+
+    const allowedStatuses = [
+      "ASSIGNED",
+      "IN_PROGRESS",
+      "COMPLETED",
+      "ON_HOLD",
+      "CLOSED",
+    ];
+    if (status && allowedStatuses.includes(String(status).toUpperCase())) {
       fields.push("status = ?");
-      values.push(status);
+      values.push(String(status).toUpperCase());
     }
     if (progress_notes !== undefined) {
       fields.push("progress_notes = ?");
@@ -268,38 +269,41 @@ router.put("/:id", async (req, res) => {
        NOTIFICATIONS
        ========================================================= */
 
-    // 1. Teamlead was just assigned → notify the teamlead
+    // 1. Teamlead newly assigned → notify teamlead
     if (
       teamlead_id !== undefined &&
       teamlead_id !== null &&
       Number(teamlead_id) !== Number(before.teamlead_id)
     ) {
-      await notifyUsers(
-        [teamlead_id],
-        {
-          ticket_id: Number(id),
-          title: "New project assigned to you",
-          message: `Project "${before.name}" has been assigned to you.`,
-          type: "PROJECT_ASSIGNED",
-        }
-      );
+      await notifyUsers([teamlead_id], {
+        ticket_id: Number(id),
+        title: "New project assigned to you",
+        message: `Project "${before.name}" has been assigned to you.`,
+        type: "PROJECT_ASSIGNED",
+      });
     }
 
     // 2. Status changed to IN_PROGRESS or COMPLETED → notify customer + admin
-    const statusChanged = status && status !== before.status;
-    if (statusChanged && (status === "IN_PROGRESS" || status === "COMPLETED")) {
-      const recipients = [
-        before.customer_id, // customer
-        before.admin_id,    // admin
-      ];
+    const newStatus = status ? String(status).toUpperCase() : null;
+    const oldStatus = before.status ? String(before.status).toUpperCase() : null;
+    const statusChanged = newStatus && newStatus !== oldStatus;
+
+    console.log("🔔 statusChanged?", statusChanged, { oldStatus, newStatus });
+
+    if (
+      statusChanged &&
+      (newStatus === "IN_PROGRESS" || newStatus === "COMPLETED")
+    ) {
+      const recipients = [before.customer_id, before.admin_id];
+      console.log("🔔 recipients (customer_id, admin_id) =", recipients);
 
       const title =
-        status === "COMPLETED"
+        newStatus === "COMPLETED"
           ? "Project completed"
           : "Project in progress";
 
       const message =
-        status === "COMPLETED"
+        newStatus === "COMPLETED"
           ? `Project "${before.name}" has been completed.${
               progress_notes ? ` Notes: ${progress_notes}` : ""
             }`
@@ -312,7 +316,7 @@ router.put("/:id", async (req, res) => {
         title,
         message,
         type:
-          status === "COMPLETED"
+          newStatus === "COMPLETED"
             ? "PROJECT_COMPLETED"
             : "PROJECT_IN_PROGRESS",
       });

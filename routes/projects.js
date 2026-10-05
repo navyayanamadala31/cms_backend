@@ -109,7 +109,9 @@ router.get("/", async (_req, res) => {
       `SELECT
          p.id, p.name, p.description, p.start_date, p.end_date,
          p.customer_id, p.admin_id, p.teamlead_id,
-         p.status, p.progress_notes, p.created_at, p.updated_at,
+         p.status, p.progress_notes,
+         p.customer_response, p.customer_status,
+         p.created_at, p.updated_at,
          c.name AS customer_name, c.email AS customer_email,
          a.name AS admin_name,    a.email AS admin_email,
          t.name AS teamlead_name, t.email AS teamlead_email
@@ -140,7 +142,9 @@ router.get("/:id", async (req, res) => {
       `SELECT
          p.id, p.name, p.description, p.start_date, p.end_date,
          p.customer_id, p.admin_id, p.teamlead_id,
-         p.status, p.progress_notes, p.created_at, p.updated_at,
+         p.status, p.progress_notes,
+         p.customer_response, p.customer_status,
+         p.created_at, p.updated_at,
          c.name AS customer_name, c.email AS customer_email,
          a.name AS admin_name,    a.email AS admin_email,
          t.name AS teamlead_name, t.email AS teamlead_email
@@ -187,10 +191,12 @@ router.put("/:id", async (req, res) => {
       teamlead_id,
       status,
       progress_notes,
+      customer_response, // 👈 new
+      customer_status,   // 👈 new
     } = req.body;
 
     const [existing] = await db.query(
-      "SELECT id, name, customer_id, admin_id, teamlead_id, status FROM projects WHERE id = ? LIMIT 1",
+      "SELECT id, name, customer_id, admin_id, teamlead_id, status, customer_status FROM projects WHERE id = ? LIMIT 1",
       [id]
     );
     if (existing.length === 0) {
@@ -250,6 +256,21 @@ router.put("/:id", async (req, res) => {
     if (progress_notes !== undefined) {
       fields.push("progress_notes = ?");
       values.push(progress_notes);
+    }
+
+    // ---- Customer response + customer status (new) ----
+    if (customer_response !== undefined) {
+      fields.push("customer_response = ?");
+      values.push(customer_response);
+    }
+
+    const allowedCustomerStatuses = ["PENDING", "RESOLVED"];
+    const newCustomerStatus = customer_status
+      ? String(customer_status).toUpperCase()
+      : null;
+    if (newCustomerStatus && allowedCustomerStatuses.includes(newCustomerStatus)) {
+      fields.push("customer_status = ?");
+      values.push(newCustomerStatus);
     }
 
     if (fields.length === 0) {
@@ -319,6 +340,21 @@ router.put("/:id", async (req, res) => {
           newStatus === "COMPLETED"
             ? "PROJECT_COMPLETED"
             : "PROJECT_IN_PROGRESS",
+      });
+    }
+
+    // 3. Customer resolved → notify teamlead + admin (new)
+    if (newCustomerStatus === "RESOLVED") {
+      const recipients = [before.teamlead_id, before.admin_id];
+      console.log("🔔 customer resolved — recipients (teamlead_id, admin_id) =", recipients);
+
+      await notifyUsers(recipients, {
+        ticket_id: Number(id),
+        title: "Customer responded",
+        message: `Customer has resolved project "${before.name}".${
+          customer_response ? ` Response: ${customer_response}` : ""
+        }`,
+        type: "PROJECT_CUSTOMER_RESOLVED",
       });
     }
 

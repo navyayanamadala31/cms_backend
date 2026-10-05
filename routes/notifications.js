@@ -68,6 +68,7 @@ router.put("/mark-all-read", async (req, res) => {
 /* =========================================================
    GET /api/notifications?user_id=5
    List notifications for a user (newest first)
+   Scoped strictly to the given user_id.
    ========================================================= */
 router.get("/", async (req, res) => {
   try {
@@ -80,6 +81,27 @@ router.get("/", async (req, res) => {
       });
     }
 
+    // ---- Verify the user exists (prevents silent empty lists) ----
+    const [u] = await db.query(
+      "SELECT id, role, status FROM users WHERE id = ? LIMIT 1",
+      [user_id]
+    );
+
+    if (u.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if (u[0].status !== "active") {
+      return res.status(403).json({
+        success: false,
+        message: "User is inactive",
+      });
+    }
+
+    // ---- Fetch this user's notifications only ----
     let sql = `SELECT id, user_id, ticket_id, title, message, type,
                       is_read, created_at
                FROM notifications
@@ -94,7 +116,13 @@ router.get("/", async (req, res) => {
 
     const [rows] = await db.query(sql, params);
 
-    return res.json({ success: true, count: rows.length, data: rows });
+    return res.json({
+      success: true,
+      user_id: Number(user_id),
+      role: u[0].role,
+      count: rows.length,
+      data: rows,
+    });
   } catch (err) {
     console.error("List notifications error:", err);
     return res.status(500).json({

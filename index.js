@@ -22,12 +22,14 @@ const ticketRoutes = require("./routes/tickets");
 const notificationRoutes = require("./routes/notifications");
 const customerRoutes = require("./routes/customers"); 
 const projectRoutes = require("./routes/projects"); 
+const teammemberRoutes = require("./routes/teammembers");
 app.use("/api/admins", adminRoutes);
 app.use("/api/teamleads", teamleadRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/customers", customerRoutes); 
 app.use("/api/projects", projectRoutes); 
+app.use("/api/teammembers", teammemberRoutes);
 // ============== Health check ==============
 app.get("/api/health", (_req, res) => {
   res.json({ status: "OK", message: "Server is running" });
@@ -52,4 +54,5 @@ app.listen(PORT, () => {
   console.log(`📝 Notifications API: http://localhost:${PORT}/api/notifications`);
   console.log(`📝 Customer API:      http://localhost:${PORT}/api/customers`);
   console.log(`📝 Projects API:      http://localhost:${PORT}/api/projects`);
+  console.log(`📝 Team Member API:   http://localhost:${PORT}/api/teammembers`);
 });

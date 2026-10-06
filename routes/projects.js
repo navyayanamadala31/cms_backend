@@ -445,13 +445,63 @@
 // module.exports = router;
 
 
-
-
-
 const express = require("express");
 const db = require("../db");
 
 const router = express.Router();
+
+/* =========================================================
+   Helper — safely parse JSON member_ids column
+   ========================================================= */
+const parseMemberIds = (row) => {
+  if (!row) return row;
+  if (typeof row.member_ids === "string") {
+    try {
+      row.member_ids = JSON.parse(row.member_ids);
+    } catch {
+      row.member_ids = [];
+    }
+  }
+  if (!Array.isArray(row.member_ids)) row.member_ids = [];
+  return row;
+};
+
+/* =========================================================
+   Helper — batch fetch team members by their IDs
+   Returns a map: { [id]: memberRow }
+   ========================================================= */
+const fetchTeamMembersByIds = async (ids) => {
+  const clean = [
+    ...new Set(
+      (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+    ),
+  ];
+
+  if (clean.length === 0) return {};
+
+  const [rows] = await db.query(
+    `SELECT id, name, email, phone, role, status, created_at
+     FROM users
+     WHERE id IN (?) AND role = 'teammember'`,
+    [clean]
+  );
+
+  const map = {};
+  rows.forEach((r) => {
+    map[r.id] = r;
+  });
+  return map;
+};
+
+/* =========================================================
+   Helper — attach team_members array to a project object
+   ========================================================= */
+const attachTeamMembers = (project, memberMap) => ({
+  ...project,
+  team_members: (project.member_ids || [])
+    .map((mid) => memberMap[mid])
+    .filter(Boolean),
+});
 
 /* =========================================================
    Helper — insert notifications for a list of user ids
@@ -463,7 +513,10 @@ const notifyUsers = async (userIds, { ticket_id, title, message, type }) => {
     .filter((v) => Number.isInteger(v) && v > 0);
 
   if (ids.length === 0) {
-    console.log("🔔 notifyUsers skipped — no valid recipients", { userIds, type });
+    console.log("🔔 notifyUsers skipped — no valid recipients", {
+      userIds,
+      type,
+    });
     return;
   }
 
@@ -474,7 +527,7 @@ const notifyUsers = async (userIds, { ticket_id, title, message, type }) => {
       title,
       message,
       type,
-      0, // is_read = 0 explicitly
+      0,
     ]);
 
     const [result] = await db.query(
@@ -506,6 +559,7 @@ router.post("/", async (req, res) => {
       customer_id = null,
       admin_id = null,
       teamlead_id = null,
+      member_ids = [],
     } = req.body;
 
     if (!name || !name.trim()) {
@@ -515,10 +569,16 @@ router.post("/", async (req, res) => {
       });
     }
 
+    const safeMemberIds = Array.isArray(member_ids)
+      ? member_ids
+          .map(Number)
+          .filter((n) => Number.isInteger(n) && n > 0)
+      : [];
+
     const [result] = await db.query(
       `INSERT INTO projects
-        (name, description, start_date, end_date, customer_id, admin_id, teamlead_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (name, description, start_date, end_date, customer_id, admin_id, teamlead_id, member_ids)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name.trim(),
         description || null,
@@ -527,6 +587,7 @@ router.post("/", async (req, res) => {
         customer_id || null,
         admin_id || null,
         teamlead_id || null,
+        JSON.stringify(safeMemberIds),
       ]
     );
 
@@ -558,6 +619,8 @@ router.post("/", async (req, res) => {
         customer_id: customer_id || null,
         admin_id: admin_id || null,
         teamlead_id: teamlead_id || null,
+        member_ids: safeMemberIds,
+        team_members: [],
       },
     });
   } catch (err) {
@@ -572,13 +635,14 @@ router.post("/", async (req, res) => {
 
 /* =========================================================
    GET /api/projects
+   Enriched with team_members[] for each project
    ========================================================= */
 router.get("/", async (_req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT
          p.id, p.name, p.description, p.start_date, p.end_date,
-         p.customer_id, p.admin_id, p.teamlead_id,
+         p.customer_id, p.admin_id, p.teamlead_id, p.member_ids,
          p.status, p.progress_notes,
          p.customer_response, p.customer_status,
          p.created_at, p.updated_at,
@@ -592,7 +656,21 @@ router.get("/", async (_req, res) => {
        ORDER BY p.created_at DESC`
     );
 
-    return res.json({ success: true, count: rows.length, data: rows });
+    // parse JSON column on all projects
+    const projects = rows.map(parseMemberIds);
+
+    // gather every member_id across all projects → one single DB call
+    const allMemberIds = projects.flatMap((p) => p.member_ids || []);
+    const memberMap = await fetchTeamMembersByIds(allMemberIds);
+
+    // attach team_members[] to each project
+    const enriched = projects.map((p) => attachTeamMembers(p, memberMap));
+
+    return res.json({
+      success: true,
+      count: enriched.length,
+      data: enriched,
+    });
   } catch (err) {
     console.error("List projects error:", err);
     return res.status(500).json({
@@ -605,13 +683,14 @@ router.get("/", async (_req, res) => {
 
 /* =========================================================
    GET /api/projects/:id
+   Enriched with team_members[] for that project
    ========================================================= */
 router.get("/:id", async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT
          p.id, p.name, p.description, p.start_date, p.end_date,
-         p.customer_id, p.admin_id, p.teamlead_id,
+         p.customer_id, p.admin_id, p.teamlead_id, p.member_ids,
          p.status, p.progress_notes,
          p.customer_response, p.customer_status,
          p.created_at, p.updated_at,
@@ -634,7 +713,11 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    return res.json({ success: true, data: rows[0] });
+    const project = parseMemberIds(rows[0]);
+    const memberMap = await fetchTeamMembersByIds(project.member_ids || []);
+    const enriched = attachTeamMembers(project, memberMap);
+
+    return res.json({ success: true, data: enriched });
   } catch (err) {
     console.error("Get project error:", err);
     return res.status(500).json({
@@ -649,7 +732,7 @@ router.get("/:id", async (req, res) => {
    PUT /api/projects/:id
    Team lead updates status + progress notes.
    Customer submits response + customer_status.
-   Notifications go ONLY to this project's customer + admin.
+   Saves member_ids + notifies new members.
    ========================================================= */
 router.put("/:id", async (req, res) => {
   try {
@@ -662,16 +745,17 @@ router.put("/:id", async (req, res) => {
       customer_id,
       admin_id,
       teamlead_id,
+      member_ids,
       status,
       progress_notes,
       customer_response,
       customer_status,
     } = req.body;
 
-    // ---- Fetch current project (we need customer_id + admin_id) ----
+    // ---- Fetch current project (we need customer_id + admin_id + old member_ids) ----
     const [existing] = await db.query(
       `SELECT id, name, customer_id, admin_id, teamlead_id, status,
-              customer_response, customer_status
+              customer_response, customer_status, member_ids
        FROM projects WHERE id = ? LIMIT 1`,
       [id]
     );
@@ -684,6 +768,7 @@ router.put("/:id", async (req, res) => {
     }
 
     const before = existing[0];
+    const beforeMemberIds = parseMemberIds({ ...before }).member_ids || [];
 
     console.log("🧾 PUT /projects/" + id + " — before =", before);
     console.log("🧾 PUT /projects/" + id + " — body   =", req.body);
@@ -719,6 +804,16 @@ router.put("/:id", async (req, res) => {
     if (teamlead_id !== undefined) {
       fields.push("teamlead_id = ?");
       values.push(teamlead_id || null);
+    }
+
+    // ---- Save member_ids as JSON ----
+    let newMemberIds = null;
+    if (member_ids !== undefined && Array.isArray(member_ids)) {
+      newMemberIds = member_ids
+        .map(Number)
+        .filter((n) => Number.isInteger(n) && n > 0);
+      fields.push("member_ids = ?");
+      values.push(JSON.stringify(newMemberIds));
     }
 
     const allowedStatuses = [
@@ -788,8 +883,29 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    // 2. Status changed to IN_PROGRESS or COMPLETED → notify this project's customer + admin
-    const oldStatus = before.status ? String(before.status).toUpperCase() : null;
+    // 2. NEW — notify only the newly added team members (diff)
+    if (newMemberIds !== null) {
+      const added = newMemberIds.filter(
+        (mid) => !beforeMemberIds.includes(mid)
+      );
+
+      if (added.length > 0) {
+        console.log(
+          `🔔 New members added to project #${id}: [${added.join(",")}]`
+        );
+        await notifyUsers(added, {
+          ticket_id: Number(id),
+          title: "You were added to a project",
+          message: `You have been assigned to project "${before.name}".`,
+          type: "PROJECT_MEMBER_ASSIGNED",
+        });
+      }
+    }
+
+    // 3. Status changed to IN_PROGRESS or COMPLETED → notify this project's customer + admin
+    const oldStatus = before.status
+      ? String(before.status).toUpperCase()
+      : null;
     const statusChanged = newStatus && newStatus !== oldStatus;
 
     console.log("🔔 statusChanged?", statusChanged, { oldStatus, newStatus });
@@ -805,7 +921,9 @@ router.put("/:id", async (req, res) => {
       );
 
       const title =
-        newStatus === "COMPLETED" ? "Project completed" : "Project in progress";
+        newStatus === "COMPLETED"
+          ? "Project completed"
+          : "Project in progress";
 
       const message =
         newStatus === "COMPLETED"
@@ -827,7 +945,7 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    // 3. Customer submitted a response → notify the admin + teamlead
+    // 4. Customer submitted a response → notify the admin + teamlead
     if (customer_response !== undefined && customer_response !== "") {
       const recipients = [before.admin_id, before.teamlead_id];
 
@@ -838,14 +956,18 @@ router.put("/:id", async (req, res) => {
       await notifyUsers(recipients, {
         ticket_id: Number(id),
         title: "Customer responded to project",
-        message: `Customer response on "${before.name}": ${customer_response.slice(0, 120)}${
-          customer_response.length > 120 ? "…" : ""
-        }`,
+        message: `Customer response on "${before.name}": ${customer_response.slice(
+          0,
+          120
+        )}${customer_response.length > 120 ? "…" : ""}`,
         type: "PROJECT_CUSTOMER_RESPONSE",
       });
     }
 
-    return res.json({ success: true, message: "Project updated successfully" });
+    return res.json({
+      success: true,
+      message: "Project updated successfully",
+    });
   } catch (err) {
     console.error("Update project error:", err);
     return res.status(500).json({
@@ -861,10 +983,9 @@ router.put("/:id", async (req, res) => {
    ========================================================= */
 router.delete("/:id", async (req, res) => {
   try {
-    const [result] = await db.query(
-      "DELETE FROM projects WHERE id = ?",
-      [req.params.id]
-    );
+    const [result] = await db.query("DELETE FROM projects WHERE id = ?", [
+      req.params.id,
+    ]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
